@@ -1,5 +1,4 @@
-﻿//#pragma execution_character_set("utf-8")
-#ifndef CHARACTERS_H
+﻿#ifndef CHARACTERS_H
 #define CHARACTERS_H
 
 #include <string>
@@ -37,7 +36,6 @@ public:
         if (conditions.empty()) conditions.push_back(ConditionType::Normal);
     }
 
-    // ダメージを受ける処理（死亡判定つき）
     void takeDamage(int amount) {
         if (hp <= 0) return;
         hp = (std::max)(0, hp - amount);
@@ -47,15 +45,11 @@ public:
         }
     }
 
-    // 回復を受ける処理（火傷の効果をここに内包）
     void receiveHeal(int amount) {
-        if (hp <= 0) return; // 死亡者は回復しない
-
-        // 火傷状態なら回復量が50%（半分）に低下
+        if (hp <= 0) return;
         if (hasCondition(ConditionType::Burn)) {
-            amount /= 2;
+            amount /= 2; // 火傷なら回復半減
         }
-
         hp = (std::min)(maxHp, hp + amount);
     }
 };

@@ -1,5 +1,4 @@
-﻿//#pragma execution_character_set("utf-8")
-#ifndef BATTLESYSTEM_H
+﻿#ifndef BATTLESYSTEM_H
 #define BATTLESYSTEM_H
 
 #include <iostream>
@@ -18,11 +17,21 @@ private:
     Enemy enemy;
     int statusAnimIndex;
     std::chrono::steady_clock::time_point lastAnimTime;
-    std::string battleLog;
+
+    // ★戦闘ログを履歴として保存するベクトル（最大5行保持）
+    std::vector<std::string> battleLogs;
 
     void gotoxy(int x, int y) {
         COORD coord = { (SHORT)x, (SHORT)y };
         SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), coord);
+    }
+
+    // ログを追加する関数（5行を超えたら古いものを消す）
+    void addLog(std::string text) {
+        battleLogs.push_back(text);
+        if (battleLogs.size() > 5) {
+            battleLogs.erase(battleLogs.begin()); // 一番古いログを削除
+        }
     }
 
     void drawEnemyArea() {
@@ -53,7 +62,22 @@ private:
             }
         }
         std::cout << "|\n============================================================\n";
-        std::cout << " [ログ]: " << battleLog << "                                       \n";
+
+        // ★ここに最大5行のログ履歴を綺麗に並べて描画する
+        std::cout << "【 戦闘ログ履歴 】\n";
+        for (int i = 0; i < 5; ++i) {
+            if (i < battleLogs.size()) {
+                // 行の末尾をスペースで埋めて、古い残像を消す
+                std::string line = " " + battleLogs[i];
+                if (line.length() < 60) line.append(60 - line.length(), ' ');
+                std::cout << line << "\n";
+            }
+            else {
+                // ログがまだ5行ない場合は空行で埋める
+                std::cout << "                                                            \n";
+            }
+        }
+        std::cout << "------------------------------------------------------------\n";
     }
 
     char waitKeyWithAnimation() {
@@ -69,7 +93,6 @@ private:
         }
     }
 
-    // パーティ全員が死亡しているかチェック
     bool isPartyAllDead() {
         for (const auto& p : party) {
             if (p.hp > 0) return false;
@@ -78,41 +101,43 @@ private:
     }
 
 public:
-    BattleSystem(std::vector<Player>& p, Enemy e)
-        : party(p), enemy(e), statusAnimIndex(0), battleLog("") {
+    // main.cppからの第3引数(HANDLE)を受け取れるようにしつつ、内部では使わない形にします
+    BattleSystem(std::vector<Player>& p, Enemy e, HANDLE dummy = NULL)
+        : party(p), enemy(e), statusAnimIndex(0) {
         lastAnimTime = std::chrono::steady_clock::now();
+        addLog("--- 戦闘開始: " + enemy.name + " ---");
     }
 
     bool startBattle() {
         system("cls");
         std::cout << "=== BATTLE START ===========================================\n";
-        battleLog = "コマンドを入力してください。";
 
         while (enemy.hp > 0 && !isPartyAllDead()) {
+            bool playerActed = false;
+
             for (int i = 0; i < 4; ++i) {
                 if (party[i].hp <= 0) continue;
 
-                // --- ターン開始時のスリップダメージ/再生処理 ---
+                // ターン開始時の状態異常
                 if (party[i].hasCondition(ConditionType::Bleeding)) {
-                    int dot = (std::max)(1, (int)(party[i].hp * 0.05)); // 残りHPの5%
+                    int dot = (std::max)(1, (int)(party[i].hp * 0.05));
                     party[i].takeDamage(dot);
-                    battleLog = party[i].name + " は出血により " + std::to_string(dot) + " ダメージを受けた！";
-                    drawStatusArea(); Beep(180, 200); Sleep(800);
-                    if (party[i].hp <= 0) continue; // 出血死したら次の人へ
+                    addLog("【出血】" + party[i].name + " は出血で " + std::to_string(dot) + " ダメージを受けた。");
+                    drawStatusArea(); Beep(180, 150);
+                    if (party[i].hp <= 0) continue;
                 }
                 if (party[i].hasCondition(ConditionType::Regeneration)) {
-                    int regen = (std::max)(1, (int)(party[i].maxHp * 0.05)); // 最大HPの5%
+                    int regen = (std::max)(1, (int)(party[i].maxHp * 0.05));
                     int oldHp = party[i].hp;
                     party[i].receiveHeal(regen);
-                    battleLog = party[i].name + " は再生で " + std::to_string(party[i].hp - oldHp) + " 回復した！";
-                    drawStatusArea(); Beep(700, 100); Sleep(800);
+                    addLog("【再生】" + party[i].name + " は再生で " + std::to_string(party[i].hp - oldHp) + " 回復した。");
+                    drawStatusArea(); Beep(700, 100);
                 }
-                // -----------------------------------------------
 
                 while (true) {
                     drawEnemyArea();
                     drawStatusArea();
-                    gotoxy(0, 16);
+                    gotoxy(0, 21); // ログの下に行動選択を表示
                     std::cout << "1. たたかう | 2. 防御 | 3. 逃げる                     \n";
                     std::cout << "[" << party[i].name << "] の行動を選択してください ＞ ";
 
@@ -120,18 +145,21 @@ public:
                     if (choice == '1') {
                         int damage = 25;
                         enemy.hp = (std::max)(0, enemy.hp - damage);
-                        battleLog = party[i].name + " の攻撃！ " + enemy.name + " に " + std::to_string(damage) + " のダメージ！";
+                        addLog("⚔️ " + party[i].name + " の攻撃！ " + enemy.name + " に " + std::to_string(damage) + " のダメージ！");
                         Beep(600, 50);
+                        playerActed = true;
                         break;
                     }
                     else if (choice == '2') {
-                        battleLog = party[i].name + " は身を固めている。";
+                        addLog("🛡️ " + party[i].name + " は身を固めている。");
                         Beep(400, 50);
+                        playerActed = true;
                         break;
                     }
                     else if (choice == '3') {
-                        battleLog = "パーティは逃げ出した！";
-                        drawStatusArea();
+                        addLog("🏃 パーティは逃げ出した！");
+                        // 逃げログを一瞬見せる
+                        drawEnemyArea(); drawStatusArea();
                         Sleep(1000);
                         return false;
                     }
@@ -140,7 +168,7 @@ public:
             }
 
             if (enemy.hp <= 0) {
-                battleLog = enemy.name + " を倒した！";
+                addLog("🎉 " + enemy.name + " を倒した！");
                 drawEnemyArea();
                 drawStatusArea();
                 Beep(1000, 100); Beep(1300, 100); Beep(1600, 300);
@@ -148,11 +176,22 @@ public:
                 return true;
             }
 
+            // 味方ターン終了後のウェイト
+            if (playerActed && !isPartyAllDead()) {
+                drawEnemyArea();
+                drawStatusArea();
+                gotoxy(0, 21);
+                std::cout << "―― 味方の行動が終了しました。[Enter] を押して敵のターンへ ――\n";
+                std::cout << "                                                                     "; // 下の行をクリア
+                while (true) {
+                    char nextKey = waitKeyWithAnimation();
+                    if (nextKey == 13) break;
+                }
+            }
+
             // 敵のターン
             drawEnemyArea();
             drawStatusArea();
-            gotoxy(0, 16);
-            std::cout << "                                                                \n";
 
             std::vector<int> aliveTargets;
             for (int i = 0; i < 4; ++i) if (party[i].hp > 0) aliveTargets.push_back(i);
@@ -161,13 +200,23 @@ public:
             int targetIdx = aliveTargets[rand() % aliveTargets.size()];
             int eDamage = 15;
             party[targetIdx].takeDamage(eDamage);
-            battleLog = enemy.name + " の反撃！ " + party[targetIdx].name + " は " + std::to_string(eDamage) + " のダメージを受けた！";
+            addLog("💥 " + enemy.name + " の反撃！ " + party[targetIdx].name + " は " + std::to_string(eDamage) + " のダメージ！");
             Beep(200, 200);
 
             if (isPartyAllDead()) break;
-            Sleep(1000);
+
+            // 敵ターン終了後のウェイト
+            drawEnemyArea();
+            drawStatusArea();
+            gotoxy(0, 21);
+            std::cout << "―― 敵の行動が終了しました。[Enter] を押して次のターンへ  ――\n";
+            std::cout << "                                                                     ";
+            while (true) {
+                char nextKey = waitKeyWithAnimation();
+                if (nextKey == 13) break;
+            }
         }
-        return !isPartyAllDead(); // 全滅してたらfalse、勝ってたらtrue
+        return !isPartyAllDead();
     }
 };
 

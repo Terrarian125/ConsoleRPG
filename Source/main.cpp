@@ -1,5 +1,4 @@
-﻿//#pragma execution_character_set("utf-8")
-#include <iostream>
+﻿#include <iostream>
 #include <vector>
 #include <chrono>
 #include <conio.h>
@@ -15,6 +14,9 @@ private:
     int statusAnimIndex = 0;
     std::chrono::steady_clock::time_point lastAnimTime;
 
+    // ログウィンドウ専用のハンドル
+    HANDLE logOutHandle = INVALID_HANDLE_VALUE;
+
     void gotoxy(int x, int y) {
         COORD coord = { (SHORT)x, (SHORT)y };
         SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), coord);
@@ -27,10 +29,9 @@ private:
         return true;
     }
 
-    // ゲームオーバー画面
     void drawGameOver() {
         system("cls");
-        Beep(300, 500); Beep(250, 500); Beep(200, 1000); // 悲しい全滅ビープ音
+        Beep(300, 500); Beep(250, 500); Beep(200, 1000);
         std::cout << "========================================================\n";
         std::cout << "                    GAME OVER                           \n";
         std::cout << "========================================================\n";
@@ -40,13 +41,49 @@ private:
         _getch();
     }
 
+    // ★完全に独立した2つ目のウィンドウ（コンソール）を生成する
+    void initLogWindow() {
+        // 新しい独立したコンソールを割り当てる
+        if (AllocConsole()) {
+            // 新しく作られたウィンドウの出力ハンドルを取得
+            logOutHandle = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+
+            if (logOutHandle != INVALID_HANDLE_VALUE) {
+                // ログウィンドウ専用のタイトルを設定
+                // メイン窓と見分けがつくように、一時的にタイトルを変更
+                SetConsoleTitleA("RPG LOG WINDOW");
+
+                // 最初のメッセージを出力
+                DWORD written;
+                std::string initMsg = "=== RPG LOG WINDOW ===\nここに戦闘の履歴がリアルタイムで流れます。\n\n";
+                WriteConsoleA(logOutHandle, initMsg.c_str(), (DWORD)initMsg.length(), &written, NULL);
+            }
+        }
+    }
+
 public:
     GameMain() {
+        initLogWindow(); // 先にログ用別ウィンドウを開く
+
+        // メインウィンドウのタイトルを「GAME SCREEN」に設定し直す
+        // （これでメイン窓とログ窓のタイトルが別々になります）
+        HWND mainWnd = GetConsoleWindow();
+        SetWindowTextA(mainWnd, "RPG GAME SCREEN");
+
+        stageIdx.setLogHandle(logOutHandle);
+
         party.push_back(Player("プレイヤー１", 100, 100));
         party.push_back(Player("プレイヤー２", 80, 50));
         party.push_back(Player("プレイヤー３", 120, 200));
         party.push_back(Player("プレイヤー４", 90, 10));
         lastAnimTime = std::chrono::steady_clock::now();
+    }
+
+    ~GameMain() {
+        if (logOutHandle != INVALID_HANDLE_VALUE) {
+            CloseHandle(logOutHandle);
+        }
+        FreeConsole(); // 割り当てたログウィンドウを解放
     }
 
     void drawScreen() {
@@ -108,17 +145,15 @@ public:
                 stageIdx.playerX = nextX;
                 stageIdx.playerY = nextY;
 
-                // --- フィールド移動時の状態異常処理（数歩ごとにダメージ/再生） ---
                 for (auto& p : party) {
                     if (p.hp <= 0) continue;
                     if (p.hasCondition(ConditionType::Bleeding)) {
-                        p.takeDamage((std::max)(1, (int)(p.maxHp * 0.05))); // 1歩ごとに最大HPの5%
+                        p.takeDamage((std::max)(1, (int)(p.maxHp * 0.05)));
                     }
                     if (p.hasCondition(ConditionType::Regeneration)) {
                         p.receiveHeal((std::max)(1, (int)(p.maxHp * 0.05)));
                     }
                 }
-                // -------------------------------------------------------------
 
                 if (currentMap[nextY][nextX] != '.') stageIdx.triggerEvent(currentMap[nextY][nextX], party);
                 drawScreen();

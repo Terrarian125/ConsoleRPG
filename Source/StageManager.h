@@ -1,5 +1,4 @@
-﻿//#pragma execution_character_set("utf-8")
-#ifndef STAGEMANAGER_H
+﻿#ifndef STAGEMANAGER_H
 #define STAGEMANAGER_H
 
 #include <iostream>
@@ -20,14 +19,14 @@ class StageManager {
 private:
     std::map<int, std::vector<std::string>> maps;
     std::map<int, StageLink> links;
+    HANDLE logScreenBuffer;
 
 public:
     int currentStageId = 0;
     int playerX = 3;
     int playerY = 3;
 
-    StageManager() {
-        // R: 再生（リジェネ）を付与するテスト用マス
+    StageManager() : logScreenBuffer(INVALID_HANDLE_VALUE) {
         maps[0] = {
             "##########",
             "#........#",
@@ -49,6 +48,8 @@ public:
         links[1] = { -1, -1, 0, -1 };
     }
 
+    void setLogHandle(HANDLE handle) { logScreenBuffer = handle; }
+
     std::vector<std::string>& getCurrentMap() { return maps[currentStageId]; }
     StageLink getCurrentLink() { return links[currentStageId]; }
     int getWidth() { return maps[currentStageId][0].size(); }
@@ -63,7 +64,7 @@ public:
             }
             Beep(200, 150);
         }
-        else if (cellType == 'R') { // 再生マス
+        else if (cellType == 'R') {
             for (auto& p : party) {
                 p.removeCondition(ConditionType::Bleeding);
                 p.removeCondition(ConditionType::Burn);
@@ -71,22 +72,25 @@ public:
             }
             Beep(900, 100);
         }
-        else if (cellType == 'H') {
+        else if (cellType == 'H') { // 泉の処理を修正
             for (auto& p : party) {
-                p.receiveHeal(p.maxHp); // 火傷なら半分しか回復しない
-                if (!p.hasCondition(ConditionType::Burn)) {
+                p.receiveHeal(p.maxHp);
+
+                // 出血と火傷を完全に治す
+                p.removeCondition(ConditionType::Bleeding);
+                p.removeCondition(ConditionType::Burn);
+
+                // 再生(REGEN)を持っている場合は、消さずにそのまま残す
+                // 何もない場合はNormal（正常）に戻す
+                if (!p.hasCondition(ConditionType::Regeneration)) {
                     p.conditions = { ConditionType::Normal };
-                }
-                else {
-                    // 火傷だけ残して他を消す
-                    p.conditions = { ConditionType::Burn };
                 }
             }
             Beep(800, 100);
         }
         else if (cellType == 'E') {
             Enemy owl("野生のフクロウ", 150);
-            BattleSystem battle(party, owl);
+            BattleSystem battle(party, owl, logScreenBuffer); // ログ窓ハンドルを渡す
             battle.startBattle();
             system("cls");
         }
