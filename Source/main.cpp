@@ -14,9 +14,6 @@ private:
     int statusAnimIndex = 0;
     std::chrono::steady_clock::time_point lastAnimTime;
 
-    // ログウィンドウ専用のハンドル
-    HANDLE logOutHandle = INVALID_HANDLE_VALUE;
-
     void gotoxy(int x, int y) {
         COORD coord = { (SHORT)x, (SHORT)y };
         SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), coord);
@@ -41,49 +38,13 @@ private:
         _getch();
     }
 
-    // ★完全に独立した2つ目のウィンドウ（コンソール）を生成する
-    void initLogWindow() {
-        // 新しい独立したコンソールを割り当てる
-        if (AllocConsole()) {
-            // 新しく作られたウィンドウの出力ハンドルを取得
-            logOutHandle = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-
-            if (logOutHandle != INVALID_HANDLE_VALUE) {
-                // ログウィンドウ専用のタイトルを設定
-                // メイン窓と見分けがつくように、一時的にタイトルを変更
-                SetConsoleTitleA("RPG LOG WINDOW");
-
-                // 最初のメッセージを出力
-                DWORD written;
-                std::string initMsg = "=== RPG LOG WINDOW ===\nここに戦闘の履歴がリアルタイムで流れます。\n\n";
-                WriteConsoleA(logOutHandle, initMsg.c_str(), (DWORD)initMsg.length(), &written, NULL);
-            }
-        }
-    }
-
 public:
     GameMain() {
-        initLogWindow(); // 先にログ用別ウィンドウを開く
-
-        // メインウィンドウのタイトルを「GAME SCREEN」に設定し直す
-        // （これでメイン窓とログ窓のタイトルが別々になります）
-        HWND mainWnd = GetConsoleWindow();
-        SetWindowTextA(mainWnd, "RPG GAME SCREEN");
-
-        stageIdx.setLogHandle(logOutHandle);
-
         party.push_back(Player("プレイヤー１", 100, 100));
         party.push_back(Player("プレイヤー２", 80, 50));
         party.push_back(Player("プレイヤー３", 120, 200));
         party.push_back(Player("プレイヤー４", 90, 10));
         lastAnimTime = std::chrono::steady_clock::now();
-    }
-
-    ~GameMain() {
-        if (logOutHandle != INVALID_HANDLE_VALUE) {
-            CloseHandle(logOutHandle);
-        }
-        FreeConsole(); // 割り当てたログウィンドウを解放
     }
 
     void drawScreen() {
@@ -113,11 +74,36 @@ public:
         std::cout << "|\n";
         for (int i = 0; i < 4; ++i) std::cout << "|   MP " << party[i].mp << "/" << party[i].maxMp << "\t";
         std::cout << "|\n";
+
+        // 状態の【名前】
         for (int i = 0; i < 4; ++i) {
-            if (party[i].hp <= 0) std::cout << "|   状態: " << Condition::getName(ConditionType::Dead) << "\t";
+            if (party[i].hp <= 0) {
+                std::cout << "|   状態: 死亡\t";
+            }
             else {
-                int condIdx = statusAnimIndex % party[i].conditions.size();
-                std::cout << "|   状態: " << Condition::getName(party[i].conditions[condIdx]) << "\t";
+                int condIdx = statusAnimIndex % party[i].activeConditions.size();
+                auto ac = party[i].activeConditions[condIdx];
+                std::cout << "|   状態: " << Condition::getName(ac.type) << "\t";
+            }
+        }
+        std::cout << "|\n";
+
+        // ★新規追加：残り歩数
+        for (int i = 0; i < 4; ++i) {
+            if (party[i].hp <= 0) {
+                std::cout << "|   残り: ---\t";
+            }
+            else {
+                int condIdx = statusAnimIndex % party[i].activeConditions.size();
+                auto ac = party[i].activeConditions[condIdx];
+                if (ac.type == ConditionType::Normal) {
+                    std::cout << "|   残り: ---\t";
+                }
+                else {
+                    char buf[16];
+                    sprintf_s(buf, "%02d歩", ac.duration);
+                    std::cout << "|   残り: " << buf << "\t";
+                }
             }
         }
         std::cout << "|\n========================================================\n";
@@ -147,11 +133,26 @@ public:
 
                 for (auto& p : party) {
                     if (p.hp <= 0) continue;
-                    if (p.hasCondition(ConditionType::Bleeding)) {
-                        p.takeDamage((std::max)(1, (int)(p.maxHp * 0.05)));
+
+                    std::vector<ConditionType> toRemove;
+                    for (auto& ac : p.activeConditions) {
+                        if (ac.type == ConditionType::Bleeding) {
+                            p.takeDamage((std::max)(1, (int)(p.maxHp * 0.05)));
+                            ac.duration--;
+                            if (ac.duration <= 0) toRemove.push_back(ConditionType::Bleeding);
+                        }
+                        else if (ac.type == ConditionType::Burn) {
+                            ac.duration--;
+                            if (ac.duration <= 0) toRemove.push_back(ConditionType::Burn);
+                        }
+                        else if (ac.type == ConditionType::Regeneration) {
+                            p.receiveHeal((std::max)(1, (int)(p.maxHp * 0.05)));
+                            ac.duration--;
+                            if (ac.duration <= 0) toRemove.push_back(ConditionType::Regeneration);
+                        }
                     }
-                    if (p.hasCondition(ConditionType::Regeneration)) {
-                        p.receiveHeal((std::max)(1, (int)(p.maxHp * 0.05)));
+                    for (auto type : toRemove) {
+                        p.removeCondition(type);
                     }
                 }
 

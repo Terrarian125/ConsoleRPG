@@ -17,20 +17,18 @@ private:
     Enemy enemy;
     int statusAnimIndex;
     std::chrono::steady_clock::time_point lastAnimTime;
-
-    // ★戦闘ログを履歴として保存するベクトル（最大5行保持）
     std::vector<std::string> battleLogs;
+    int antidoteCount;
 
     void gotoxy(int x, int y) {
         COORD coord = { (SHORT)x, (SHORT)y };
         SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), coord);
     }
 
-    // ログを追加する関数（5行を超えたら古いものを消す）
     void addLog(std::string text) {
         battleLogs.push_back(text);
         if (battleLogs.size() > 5) {
-            battleLogs.erase(battleLogs.begin()); // 一番古いログを削除
+            battleLogs.erase(battleLogs.begin());
         }
     }
 
@@ -46,34 +44,58 @@ private:
     void drawStatusArea() {
         gotoxy(0, 8);
         std::cout << "------------------------------------------------------------\n";
+        // 1行目: 名前
         for (int i = 0; i < 4; ++i) std::cout << "| " << party[i].name << "\t";
         std::cout << "|\n";
+        // 2行目: HP
         for (int i = 0; i < 4; ++i) std::cout << "|    HP " << party[i].hp << "/" << party[i].maxHp << "\t";
         std::cout << "|\n";
+        // 3行目: MP
         for (int i = 0; i < 4; ++i) std::cout << "|    MP " << party[i].mp << "/" << party[i].maxMp << "\t";
         std::cout << "|\n";
+
+        // 4行目: 状態の【名前】だけを表示（文字ズレ防止のためタブをきれいに通す）
         for (int i = 0; i < 4; ++i) {
             if (party[i].hp <= 0) {
-                std::cout << "|    状態: " << Condition::getName(ConditionType::Dead) << "\t";
+                std::cout << "|    状態: 死亡\t";
             }
             else {
-                int condIdx = statusAnimIndex % party[i].conditions.size();
-                std::cout << "|    状態: " << Condition::getName(party[i].conditions[condIdx]) << "\t";
+                int condIdx = statusAnimIndex % party[i].activeConditions.size();
+                auto ac = party[i].activeConditions[condIdx];
+                std::cout << "|    状態: " << Condition::getName(ac.type) << "\t";
+            }
+        }
+        std::cout << "|\n";
+
+        // 5行目: ★新規追加：残り時間の行
+        for (int i = 0; i < 4; ++i) {
+            if (party[i].hp <= 0) {
+                std::cout << "|    残り: ---\t";
+            }
+            else {
+                int condIdx = statusAnimIndex % party[i].activeConditions.size();
+                auto ac = party[i].activeConditions[condIdx];
+                if (ac.type == ConditionType::Normal) {
+                    std::cout << "|    残り: ---\t";
+                }
+                else {
+                    // 「残り: 03T」のように2桁に揃えて表示
+                    char buf[16];
+                    sprintf_s(buf, "%02dT", ac.duration);
+                    std::cout << "|    残り: " << buf << "\t";
+                }
             }
         }
         std::cout << "|\n============================================================\n";
 
-        // ★ここに最大5行のログ履歴を綺麗に並べて描画する
         std::cout << "【 戦闘ログ履歴 】\n";
         for (int i = 0; i < 5; ++i) {
             if (i < battleLogs.size()) {
-                // 行の末尾をスペースで埋めて、古い残像を消す
                 std::string line = " " + battleLogs[i];
                 if (line.length() < 60) line.append(60 - line.length(), ' ');
                 std::cout << line << "\n";
             }
             else {
-                // ログがまだ5行ない場合は空行で埋める
                 std::cout << "                                                            \n";
             }
         }
@@ -100,10 +122,23 @@ private:
         return true;
     }
 
+    int selectTarget() {
+        while (true) {
+            gotoxy(0, 22); // 行数が増えたので少し下に配置
+            std::cout << "誰に使いますか？ (1～4: メンバーを選択 / 0: キャンセル)            \n";
+            std::cout << "選択してください ＞ ";
+            char ch = waitKeyWithAnimation();
+            if (ch == '0') return -1;
+            if (ch >= '1' && ch <= '4') {
+                int idx = ch - '1';
+                if (party[idx].hp > 0) return idx;
+            }
+        }
+    }
+
 public:
-    // main.cppからの第3引数(HANDLE)を受け取れるようにしつつ、内部では使わない形にします
     BattleSystem(std::vector<Player>& p, Enemy e, HANDLE dummy = NULL)
-        : party(p), enemy(e), statusAnimIndex(0) {
+        : party(p), enemy(e), statusAnimIndex(0), antidoteCount(3) {
         lastAnimTime = std::chrono::steady_clock::now();
         addLog("--- 戦闘開始: " + enemy.name + " ---");
     }
@@ -118,27 +153,42 @@ public:
             for (int i = 0; i < 4; ++i) {
                 if (party[i].hp <= 0) continue;
 
-                // ターン開始時の状態異常
-                if (party[i].hasCondition(ConditionType::Bleeding)) {
-                    int dot = (std::max)(1, (int)(party[i].hp * 0.05));
-                    party[i].takeDamage(dot);
-                    addLog("【出血】" + party[i].name + " は出血で " + std::to_string(dot) + " ダメージを受けた。");
-                    drawStatusArea(); Beep(180, 150);
-                    if (party[i].hp <= 0) continue;
+                std::vector<ConditionType> toRemove;
+                for (auto& ac : party[i].activeConditions) {
+                    if (ac.type == ConditionType::Bleeding) {
+                        int dot = (std::max)(1, (int)(party[i].hp * 0.05));
+                        party[i].takeDamage(dot);
+                        addLog("【出血】" + party[i].name + " は出血で " + std::to_string(dot) + " ダメージを受けた。");
+                        ac.duration--;
+                        if (ac.duration <= 0) toRemove.push_back(ConditionType::Bleeding);
+                        drawStatusArea(); Beep(180, 150); Sleep(500);
+                        if (party[i].hp <= 0) break;
+                    }
+                    else if (ac.type == ConditionType::Burn) {
+                        ac.duration--;
+                        if (ac.duration <= 0) toRemove.push_back(ConditionType::Burn);
+                    }
+                    else if (ac.type == ConditionType::Regeneration) {
+                        int regen = (std::max)(1, (int)(party[i].maxHp * 0.05));
+                        int oldHp = party[i].hp;
+                        party[i].receiveHeal(regen);
+                        addLog("【再生】" + party[i].name + " は再生で " + std::to_string(party[i].hp - oldHp) + " 回復した。");
+                        ac.duration--;
+                        if (ac.duration <= 0) toRemove.push_back(ConditionType::Regeneration);
+                        drawStatusArea(); Beep(700, 100); Sleep(500);
+                    }
                 }
-                if (party[i].hasCondition(ConditionType::Regeneration)) {
-                    int regen = (std::max)(1, (int)(party[i].maxHp * 0.05));
-                    int oldHp = party[i].hp;
-                    party[i].receiveHeal(regen);
-                    addLog("【再生】" + party[i].name + " は再生で " + std::to_string(party[i].hp - oldHp) + " 回復した。");
-                    drawStatusArea(); Beep(700, 100);
+                for (auto type : toRemove) {
+                    party[i].removeCondition(type);
+                    addLog("✨ " + party[i].name + " の [" + Condition::getName(type) + "] が治った！");
                 }
+                if (party[i].hp <= 0) continue;
 
                 while (true) {
                     drawEnemyArea();
                     drawStatusArea();
-                    gotoxy(0, 21); // ログの下に行動選択を表示
-                    std::cout << "1. たたかう | 2. 防御 | 3. 逃げる                     \n";
+                    gotoxy(0, 22); // 行数が増えたので位置調整
+                    std::cout << "1. たたかう | 2. 防御 | 3. 道具(包帯:" << antidoteCount << "個) | 4. 逃げる       \n";
                     std::cout << "[" << party[i].name << "] の行動を選択してください ＞ ";
 
                     char choice = waitKeyWithAnimation();
@@ -157,8 +207,22 @@ public:
                         break;
                     }
                     else if (choice == '3') {
+                        if (antidoteCount <= 0) {
+                            addLog("❌ 包帯がありません！");
+                            continue;
+                        }
+                        int target = selectTarget();
+                        if (target == -1) continue;
+
+                        antidoteCount--;
+                        party[target].cureAllConditions();
+                        addLog("🧪 " + party[i].name + " は包帯を " + party[target].name + " に使った！");
+                        Beep(500, 100); Beep(650, 100);
+                        playerActed = true;
+                        break;
+                    }
+                    else if (choice == '4') {
                         addLog("🏃 パーティは逃げ出した！");
-                        // 逃げログを一瞬見せる
                         drawEnemyArea(); drawStatusArea();
                         Sleep(1000);
                         return false;
@@ -176,20 +240,18 @@ public:
                 return true;
             }
 
-            // 味方ターン終了後のウェイト
             if (playerActed && !isPartyAllDead()) {
                 drawEnemyArea();
                 drawStatusArea();
-                gotoxy(0, 21);
+                gotoxy(0, 22);
                 std::cout << "―― 味方の行動が終了しました。[Enter] を押して敵のターンへ ――\n";
-                std::cout << "                                                                     "; // 下の行をクリア
+                std::cout << "                                                                     ";
                 while (true) {
                     char nextKey = waitKeyWithAnimation();
                     if (nextKey == 13) break;
                 }
             }
 
-            // 敵のターン
             drawEnemyArea();
             drawStatusArea();
 
@@ -205,10 +267,9 @@ public:
 
             if (isPartyAllDead()) break;
 
-            // 敵ターン終了後のウェイト
             drawEnemyArea();
             drawStatusArea();
-            gotoxy(0, 21);
+            gotoxy(0, 22);
             std::cout << "―― 敵の行動が終了しました。[Enter] を押して次のターンへ  ――\n";
             std::cout << "                                                                     ";
             while (true) {

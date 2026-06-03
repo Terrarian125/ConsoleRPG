@@ -6,49 +6,71 @@
 #include <algorithm>
 #include "Common.h"
 
+struct ActiveCondition {
+    ConditionType type;
+    int duration;
+};
+
 class Player {
 public:
     std::string name;
     int hp, maxHp;
     int mp, maxMp;
-    std::vector<ConditionType> conditions;
+    std::vector<ActiveCondition> activeConditions;
 
     Player(std::string n, int h, int m) : name(n), hp(h), maxHp(h), mp(m), maxMp(m) {
-        conditions.push_back(ConditionType::Normal);
+        activeConditions.push_back({ ConditionType::Normal, 0 });
     }
 
-    void addCondition(ConditionType type) {
+    void addCondition(ConditionType type, int duration) {
         if (type == ConditionType::Normal) return;
-        if (conditions.size() == 1 && conditions[0] == ConditionType::Normal) {
-            conditions.clear();
+
+        if (activeConditions.size() == 1 && activeConditions[0].type == ConditionType::Normal) {
+            activeConditions.clear();
         }
-        for (auto c : conditions) if (c == type) return;
-        conditions.push_back(type);
+
+        for (auto& ac : activeConditions) {
+            if (ac.type == type) {
+                ac.duration = duration;
+                return;
+            }
+        }
+        activeConditions.push_back({ type, duration });
     }
 
     bool hasCondition(ConditionType type) const {
-        for (auto c : conditions) if (c == type) return true;
+        for (const auto& ac : activeConditions) if (ac.type == type) return true;
         return false;
     }
 
     void removeCondition(ConditionType type) {
-        conditions.erase(std::remove(conditions.begin(), conditions.end(), type), conditions.end());
-        if (conditions.empty()) conditions.push_back(ConditionType::Normal);
+        activeConditions.erase(
+            std::remove_if(activeConditions.begin(), activeConditions.end(),
+                [type](const ActiveCondition& ac) { return ac.type == type; }),
+            activeConditions.end()
+        );
+        if (activeConditions.empty()) activeConditions.push_back({ ConditionType::Normal, 0 });
+    }
+
+    void cureAllConditions() {
+        if (hp <= 0) return;
+        activeConditions.clear();
+        activeConditions.push_back({ ConditionType::Normal, 0 });
     }
 
     void takeDamage(int amount) {
         if (hp <= 0) return;
         hp = (std::max)(0, hp - amount);
         if (hp <= 0) {
-            conditions.clear();
-            conditions.push_back(ConditionType::Dead);
+            activeConditions.clear();
+            activeConditions.push_back({ ConditionType::Dead, 0 });
         }
     }
 
     void receiveHeal(int amount) {
         if (hp <= 0) return;
         if (hasCondition(ConditionType::Burn)) {
-            amount /= 2; // 火傷なら回復半減
+            amount /= 2;
         }
         hp = (std::min)(maxHp, hp + amount);
     }

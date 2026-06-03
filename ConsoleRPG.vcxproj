@@ -127,9 +127,6 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <None Include="ConsoleRPG.slnx" />
-  </ItemGroup>
-  <ItemGroup>
     <ClCompile Include="Source\main.cpp" />
   </ItemGroup>
   <ItemGroup>
